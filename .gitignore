@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Local runtime data
+runs/
+demo_runs/
+*.db
+*.sqlite
+*.sqlite3
+
+# Artifact stores (all local experiment artifacts)
+artifacts/
+artifacts*/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Temporary local paper conversion probes
+paper_prep/_edge_test.*
