@@ -82,6 +82,7 @@ Subcommands:
 - `docs/README.md`: docs index
 - `docs/architecture.md`: system architecture and data flow
 - `docs/mathematical_reasoning.md`: equations, gates, reward definitions
+- `docs/new_contributions.md`: concrete features and instrumentation added so far
 - `docs/results.md`: current empirical status and claim boundaries
 - `docs/publishing.md`: clean GitHub and release checklist
 
