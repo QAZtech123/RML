@@ -1,5 +1,9 @@
 # Recursive Meta-Learning (RML) Engine
 
+[![CI](https://github.com/QAZtech123/RML/actions/workflows/ci.yml/badge.svg)](https://github.com/QAZtech123/RML/actions/workflows/ci.yml)
+[![Issues](https://img.shields.io/github/issues/QAZtech123/RML)](https://github.com/QAZtech123/RML/issues)
+[![License](https://img.shields.io/badge/license-unlicensed-lightgrey)](https://github.com/QAZtech123/RML)
+
 RML is an experimental engine for consequence-aware self-improvement in training loops.
 It focuses on one core question:
 
@@ -81,6 +85,12 @@ Subcommands:
 - `docs/results.md`: current empirical status and claim boundaries
 - `docs/publishing.md`: clean GitHub and release checklist
 
+## GitHub Collaboration
+- CI: `.github/workflows/ci.yml`
+- Issue templates: `.github/ISSUE_TEMPLATE/`
+- PR template: `.github/pull_request_template.md`
+- Code owners: `.github/CODEOWNERS`
+
 ## Paper-Style Summary
 - Source: `paper_prep/rml_recursive_meta_learning_short_paper.md`
 - Build script: `paper_prep/build_short_paper.py`
@@ -95,4 +105,3 @@ Subcommands:
 - Keep changes measurable and reversible.
 - Log every major run in `rml_lab_log.md`.
 - Do not claim stable compounding without multi-seed evidence.
-

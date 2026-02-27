@@ -1854,6 +1854,11 @@ class RMLEngine:
         rescue_reason = ""
         rescue_source_used: List[str] = []
         rescue_candidate_ids: List[str] = []
+        rescue_supply_status = "not_triggered"
+        rescue_supply_fail_reason = ""
+        rescue_supply_candidates_seen_n = 0
+        rescue_supply_attempts_n = 0
+        rescue_supply_source_selected: List[str] = []
         rescue_no_parent_rate_observed = None
         rescue_candidate_n_observed = len(episodes)
         rescue_best_observed = None
@@ -1949,59 +1954,181 @@ class RMLEngine:
                 and inject_budget > 0
             )
 
-            def _select_rescue_record(ctx: Dict[str, Any]) -> Tuple[Optional[CheckpointRecord], str]:
+            rescue_supply_fail_counts: Dict[str, int] = {}
+
+            def _select_rescue_record(ctx: Dict[str, Any]) -> Tuple[Optional[CheckpointRecord], str, Dict[str, Any]]:
                 effective_arch_type = ctx.get("effective_arch_type")
                 signature_hint = ctx.get("signature_hint")
                 strict_filter = dict(ctx.get("checkpoint_filter") or {})
                 same_set_id = ctx.get("current_unseen_set_id")
+                cache_by_set = getattr(self, "_pool_elite_cache_by_set", {}) or {}
+                cache = getattr(self, "_pool_elite_cache", {}) or {}
 
-                rec = None
-                source_label = ""
+                diag = {
+                    "status": "empty",
+                    "fail_reason": "no_checkpoints",
+                    "candidates_seen_n": 0,
+                }
+                if not effective_arch_type:
+                    diag["status"] = "error"
+                    diag["fail_reason"] = "bad_context"
+                    return None, "", diag
+
+                def _payload_to_record(payload: Any) -> Optional[CheckpointRecord]:
+                    if not isinstance(payload, dict):
+                        return None
+                    state_dict = payload.get("state_dict")
+                    if not isinstance(state_dict, dict):
+                        return None
+                    path_raw = payload.get("path")
+                    if not path_raw:
+                        return None
+                    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                    return CheckpointRecord(path=Path(str(path_raw)), meta=dict(meta), state_dict=state_dict)
+
+                def _score_payload(payload: Dict[str, Any]) -> float:
+                    if not isinstance(payload, dict):
+                        return -float("inf")
+                    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                    try:
+                        return float(meta.get("unseen_score"))
+                    except Exception:
+                        return -float("inf")
+
+                def _select_best_payload(payloads: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+                    best_payload = None
+                    best_score = -float("inf")
+                    for payload in payloads:
+                        score = _score_payload(payload)
+                        if best_payload is None or score > best_score:
+                            best_payload = payload
+                            best_score = score
+                    return best_payload
+
                 try:
-                    if same_set_id is not None:
-                        same_filter = dict(strict_filter)
-                        same_filter["unseen_set_id"] = same_set_id
-                        rec = self.checkpoints.load_best(
-                            effective_arch_type,
-                            signature=signature_hint,
-                            meta_filter=same_filter,
+                    # Ladder stage 1: in-memory cache exact key.
+                    sig_key = str(signature_hint) if signature_hint is not None else "unknown"
+                    cache_key = None
+                    try:
+                        cache_key = (
+                            str(effective_arch_type),
+                            int(strict_filter.get("unseen_pool_idx")),
+                            str(strict_filter.get("regime_id")),
+                            sig_key,
                         )
+                    except Exception:
+                        cache_key = None
+                    if cache_key is not None and same_set_id is not None:
+                        cached = cache_by_set.get((cache_key, same_set_id))
+                        rec = _payload_to_record(cached)
                         if rec is not None:
-                            source_label = "checkpoint"
-                    if rec is None:
-                        rec = self.checkpoints.load_best(
-                            effective_arch_type,
-                            signature=signature_hint,
-                            meta_filter=strict_filter,
-                        )
+                            diag["status"] = "ok"
+                            diag["candidates_seen_n"] = max(1, int(diag["candidates_seen_n"]))
+                            return rec, "checkpoint", diag
+                    if cache_key is not None:
+                        cached = cache.get(cache_key)
+                        rec = _payload_to_record(cached)
                         if rec is not None:
-                            source_label = "checkpoint"
-                    if rec is None:
-                        loose_filter = dict(strict_filter)
-                        loose_filter.pop("regime_id", None)
-                        loose_filter.pop("lr_bin", None)
+                            diag["status"] = "ok"
+                            diag["candidates_seen_n"] = max(1, int(diag["candidates_seen_n"]))
+                            return rec, "checkpoint", diag
+
+                    # Ladder stage 2: in-memory cache relaxed by signature / regime.
+                    arch_payloads: List[Dict[str, Any]] = []
+                    for payload in cache.values():
+                        if not isinstance(payload, dict):
+                            continue
+                        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                        if str(meta.get("arch_type")) != str(effective_arch_type):
+                            continue
+                        arch_payloads.append(payload)
+                    diag["candidates_seen_n"] = max(int(diag["candidates_seen_n"]), len(arch_payloads))
+
+                    def _meta_signature(payload: Dict[str, Any]) -> str:
+                        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                        return str(meta.get("model_signature")) if meta.get("model_signature") is not None else ""
+
+                    def _meta_set(payload: Dict[str, Any]) -> str:
+                        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                        return str(meta.get("unseen_set_id")) if meta.get("unseen_set_id") is not None else ""
+
+                    if arch_payloads and signature_hint is not None:
+                        sig_payloads = [p for p in arch_payloads if _meta_signature(p) == str(signature_hint)]
                         if same_set_id is not None:
-                            loose_same_filter = dict(loose_filter)
-                            loose_same_filter["unseen_set_id"] = same_set_id
-                            rec = self.checkpoints.load_best(
-                                effective_arch_type,
-                                signature=signature_hint,
-                                meta_filter=loose_same_filter,
-                            )
+                            sig_same_payloads = [p for p in sig_payloads if _meta_set(p) == str(same_set_id)]
+                            rec = _payload_to_record(_select_best_payload(sig_same_payloads))
                             if rec is not None:
-                                source_label = "stale_checkpoint"
-                        if rec is None:
-                            rec = self.checkpoints.load_best(
-                                effective_arch_type,
-                                signature=signature_hint,
-                                meta_filter=loose_filter,
-                            )
+                                diag["status"] = "ok"
+                                return rec, "stale_checkpoint", diag
+                        rec = _payload_to_record(_select_best_payload(sig_payloads))
+                        if rec is not None:
+                            diag["status"] = "ok"
+                            return rec, "stale_checkpoint", diag
+
+                    if arch_payloads:
+                        if same_set_id is not None:
+                            same_payloads = [p for p in arch_payloads if _meta_set(p) == str(same_set_id)]
+                            rec = _payload_to_record(_select_best_payload(same_payloads))
                             if rec is not None:
-                                source_label = "fallback_checkpoint"
+                                diag["status"] = "ok"
+                                return rec, "fallback_checkpoint", diag
+                        rec = _payload_to_record(_select_best_payload(arch_payloads))
+                        if rec is not None:
+                            diag["status"] = "ok"
+                            return rec, "fallback_checkpoint", diag
+
+                    # Ladder stage 3: checkpoint store probes (strict -> relaxed, with and without signature).
+                    loose_filter = dict(strict_filter)
+                    loose_filter.pop("regime_id", None)
+                    loose_filter.pop("lr_bin", None)
+
+                    def _store_probe(meta_filter: Optional[Dict[str, Any]], signature: Optional[str], source: str):
+                        rec = self.checkpoints.load_best(
+                            str(effective_arch_type),
+                            signature=signature,
+                            meta_filter=meta_filter,
+                        )
+                        if rec is not None:
+                            diag["status"] = "ok"
+                            diag["candidates_seen_n"] = max(1, int(diag["candidates_seen_n"]))
+                            return rec, source
+                        return None, ""
+
+                    probe_filters: List[Tuple[Optional[Dict[str, Any]], str]] = []
+                    if same_set_id is not None:
+                        same_strict = dict(strict_filter)
+                        same_strict["unseen_set_id"] = same_set_id
+                        probe_filters.append((same_strict, "checkpoint"))
+                    probe_filters.append((dict(strict_filter), "checkpoint"))
+                    if same_set_id is not None:
+                        same_loose = dict(loose_filter)
+                        same_loose["unseen_set_id"] = same_set_id
+                        probe_filters.append((same_loose, "stale_checkpoint"))
+                    probe_filters.append((dict(loose_filter), "fallback_checkpoint"))
+                    if same_set_id is not None:
+                        probe_filters.append(({"unseen_set_id": same_set_id}, "stale_checkpoint"))
+                    probe_filters.append((None, "fallback_checkpoint"))
+
+                    signatures: List[Optional[str]] = []
+                    if signature_hint is not None:
+                        signatures.append(str(signature_hint))
+                    signatures.append(None)
+                    for sig in signatures:
+                        for mf, source in probe_filters:
+                            rec, source_label = _store_probe(mf, sig, source)
+                            if rec is not None:
+                                return rec, source_label, diag
+
+                    if int(diag["candidates_seen_n"]) > 0:
+                        diag["status"] = "filtered"
+                        diag["fail_reason"] = "all_filtered"
+                    else:
+                        diag["status"] = "empty"
+                        diag["fail_reason"] = "no_checkpoints"
                 except Exception:
-                    rec = None
-                    source_label = ""
-                return rec, source_label
+                    diag["status"] = "error"
+                    diag["fail_reason"] = "supply_error"
+                return None, "", diag
 
             if rescue_triggered and provisional_no_parent_indices:
                 targets = sorted(
@@ -2014,7 +2141,15 @@ class RMLEngine:
                     if target_idx >= len(candidate_exec_contexts):
                         continue
                     ctx = candidate_exec_contexts[target_idx]
-                    rec, source_label = _select_rescue_record(ctx)
+                    rescue_supply_attempts_n += 1
+                    rec, source_label, supply_diag = _select_rescue_record(ctx)
+                    try:
+                        rescue_supply_candidates_seen_n += int(supply_diag.get("candidates_seen_n") or 0)
+                    except Exception:
+                        pass
+                    fail_reason = str(supply_diag.get("fail_reason") or "").strip()
+                    if fail_reason:
+                        rescue_supply_fail_counts[fail_reason] = rescue_supply_fail_counts.get(fail_reason, 0) + 1
                     if rec is None or not source_label:
                         continue
                     rec_meta = rec.meta if isinstance(rec.meta, dict) else {}
@@ -2108,8 +2243,34 @@ class RMLEngine:
                         "delta": None,
                     }
                     rescue_source_used.append(source_label)
+                    rescue_supply_source_selected.append(source_label)
                     rescue_candidate_ids.append(str(rec_key))
                     rescue_injected_n += 1
+
+            def _top_fail_reason(default: str) -> str:
+                if not rescue_supply_fail_counts:
+                    return default
+                best_reason = default
+                best_count = -1
+                for reason, count in rescue_supply_fail_counts.items():
+                    if count > best_count:
+                        best_reason = reason
+                        best_count = count
+                return best_reason
+
+            if rescue_triggered:
+                if rescue_injected_n > 0:
+                    rescue_supply_status = "ok"
+                    rescue_supply_fail_reason = ""
+                elif rescue_supply_fail_counts.get("supply_error"):
+                    rescue_supply_status = "error"
+                    rescue_supply_fail_reason = _top_fail_reason("supply_error")
+                elif rescue_supply_candidates_seen_n > 0:
+                    rescue_supply_status = "filtered"
+                    rescue_supply_fail_reason = _top_fail_reason("all_filtered")
+                else:
+                    rescue_supply_status = "empty"
+                    rescue_supply_fail_reason = _top_fail_reason("no_checkpoints")
 
             reason_parts: List[str] = []
             if no_parent_high:
@@ -2123,6 +2284,10 @@ class RMLEngine:
             if inject_budget <= 0:
                 reason_parts.append("budget_exhausted")
             if rescue_triggered and rescue_injected_n == 0:
+                if rescue_supply_fail_reason:
+                    reason_parts.append(rescue_supply_fail_reason)
+                if rescue_supply_status in {"empty", "filtered", "error"}:
+                    reason_parts.append(f"supply_{rescue_supply_status}")
                 reason_parts.append("no_checkpoint_found")
             if rescue_injected_n > 0:
                 reason_parts.append("injected")
@@ -2793,6 +2958,11 @@ class RMLEngine:
             "rescue_injected_n": int(rescue_injected_n),
             "rescue_source_used": "|".join(rescue_source_used),
             "rescue_candidate_ids": "|".join(rescue_candidate_ids),
+            "rescue_supply_status": rescue_supply_status,
+            "rescue_supply_fail_reason": rescue_supply_fail_reason,
+            "rescue_supply_candidates_seen_n": int(rescue_supply_candidates_seen_n),
+            "rescue_supply_attempts_n": int(rescue_supply_attempts_n),
+            "rescue_supply_source_selected": "|".join(rescue_supply_source_selected),
             "rescue_no_parent_rate_observed": rescue_no_parent_rate_observed,
             "rescue_candidate_n_observed": rescue_candidate_n_observed,
             "rescue_best_observed": rescue_best_observed,

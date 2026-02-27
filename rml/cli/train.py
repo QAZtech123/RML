@@ -53,6 +53,11 @@ CSV_APPEND_FIELDS = [
     "rescue_injected_n",
     "rescue_source_used",
     "rescue_candidate_ids",
+    "rescue_supply_status",
+    "rescue_supply_fail_reason",
+    "rescue_supply_candidates_seen_n",
+    "rescue_supply_attempts_n",
+    "rescue_supply_source_selected",
     "rescue_no_parent_rate_observed",
     "rescue_candidate_n_observed",
     "rescue_best_observed",
@@ -440,6 +445,11 @@ def train_cmd(args) -> None:
         row.setdefault("rescue_injected_n", meta.get("rescue_injected_n"))
         row.setdefault("rescue_source_used", meta.get("rescue_source_used"))
         row.setdefault("rescue_candidate_ids", meta.get("rescue_candidate_ids"))
+        row.setdefault("rescue_supply_status", meta.get("rescue_supply_status"))
+        row.setdefault("rescue_supply_fail_reason", meta.get("rescue_supply_fail_reason"))
+        row.setdefault("rescue_supply_candidates_seen_n", meta.get("rescue_supply_candidates_seen_n"))
+        row.setdefault("rescue_supply_attempts_n", meta.get("rescue_supply_attempts_n"))
+        row.setdefault("rescue_supply_source_selected", meta.get("rescue_supply_source_selected"))
         row.setdefault("rescue_no_parent_rate_observed", meta.get("rescue_no_parent_rate_observed"))
         row.setdefault("rescue_candidate_n_observed", meta.get("rescue_candidate_n_observed"))
         row.setdefault("rescue_best_observed", meta.get("rescue_best_observed"))

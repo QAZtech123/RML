@@ -1165,6 +1165,11 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
         "rescue_triggered",
         "rescue_reason",
         "rescue_injected_n",
+        "rescue_supply_status",
+        "rescue_supply_fail_reason",
+        "rescue_supply_candidates_seen_n",
+        "rescue_supply_attempts_n",
+        "rescue_supply_source_selected",
     ]
     rescue_cols_present = [k for k in rescue_cols if any(k in row for row in rows)]
     print("\nRescue injection diagnostics:")
@@ -1182,9 +1187,13 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
     non_rescue_rows = []
     triggered_rows = []
     reason_counts = Counter()
+    supply_status_counts = Counter()
+    supply_fail_counts = Counter()
     injected_source_counts = Counter()
     rescue_injected_total = 0
     rescue_injected_n_values = []
+    rescue_supply_seen_values = []
+    rescue_supply_attempt_values = []
     rescue_enable_true_n = 0
 
     for row in rows:
@@ -1198,6 +1207,18 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
             reason = str(row.get("rescue_reason") or "").strip()
             if reason:
                 reason_counts[reason] += 1
+            supply_status = str(row.get("rescue_supply_status") or "").strip()
+            if supply_status:
+                supply_status_counts[supply_status] += 1
+            supply_fail = str(row.get("rescue_supply_fail_reason") or "").strip()
+            if supply_fail:
+                supply_fail_counts[supply_fail] += 1
+            supply_seen_n = _as_int(row.get("rescue_supply_candidates_seen_n"))
+            if supply_seen_n is not None:
+                rescue_supply_seen_values.append(int(supply_seen_n))
+            supply_attempt_n = _as_int(row.get("rescue_supply_attempts_n"))
+            if supply_attempt_n is not None:
+                rescue_supply_attempt_values.append(int(supply_attempt_n))
         if rescue_injected:
             rescue_rows.append(row)
             inj_n = _as_int(row.get("rescue_injected_n"))
@@ -1205,7 +1226,8 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
                 inj_n = 1
             rescue_injected_total += int(inj_n)
             rescue_injected_n_values.append(int(inj_n))
-            source_blob = str(row.get("rescue_source_used") or "").strip()
+            selected_blob = str(row.get("rescue_supply_source_selected") or "").strip()
+            source_blob = selected_blob or str(row.get("rescue_source_used") or "").strip()
             if source_blob:
                 for src in source_blob.split("|"):
                     src = src.strip()
@@ -1218,6 +1240,20 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
     print(f"- rescue_triggered_steps={len(triggered_rows)}")
     print(f"- rescue_injected_steps={len(rescue_rows)}")
     print(f"- rescue_injected_total={rescue_injected_total}")
+    if rescue_supply_seen_values:
+        print(
+            f"- rescue_supply_candidates_seen_stats: min={min(rescue_supply_seen_values)} "
+            f"mean={_mean(rescue_supply_seen_values):.4f} max={max(rescue_supply_seen_values)}"
+        )
+    else:
+        print("- rescue_supply_candidates_seen_stats: min=NA mean=NA max=NA")
+    if rescue_supply_attempt_values:
+        print(
+            f"- rescue_supply_attempts_stats: min={min(rescue_supply_attempt_values)} "
+            f"mean={_mean(rescue_supply_attempt_values):.4f} max={max(rescue_supply_attempt_values)}"
+        )
+    else:
+        print("- rescue_supply_attempts_stats: min=NA mean=NA max=NA")
 
     def _step_stats(sample_rows):
         if not sample_rows:
@@ -1274,6 +1310,15 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
     if reason_counts:
         print("\nTop rescue reasons:")
         for reason, n in reason_counts.most_common(max(1, int(top_k))):
+            print(f"  - {reason}: {n}")
+    if supply_status_counts:
+        print("\nRescue supply status (triggered steps):")
+        denom = max(1, sum(supply_status_counts.values()))
+        for status, n in supply_status_counts.most_common(max(1, int(top_k))):
+            print(f"  - {status}: {n} ({n/denom:.3f})")
+    if supply_fail_counts:
+        print("\nTop rescue supply fail reasons:")
+        for reason, n in supply_fail_counts.most_common(max(1, int(top_k))):
             print(f"  - {reason}: {n}")
     if injected_source_counts:
         print("\nInjected source mix:")

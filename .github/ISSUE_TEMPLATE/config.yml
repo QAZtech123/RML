@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/QAZtech123/RML/tree/main/docs
+    about: Read architecture, math reasoning, and publishing docs before filing.
+

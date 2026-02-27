@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a reproducible defect.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include enough detail to reproduce quickly.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: One-paragraph bug summary.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction command
+      description: Exact command(s) used.
+      placeholder: |
+        python -m rml.cli train --runner real --steps ...
+    validations:
+      required: true
+
+  - type: input
+    id: run_id
+    attributes:
+      label: Run identifier
+      description: CSV path, DB path, or experiment tag.
+      placeholder: runs/train_log_transfer_vXX.csv
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / traceback
+      description: Paste key output (do not paste huge files).
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Sanity checks
+      options:
+        - label: I used the latest commit from `main`.
+          required: true
+        - label: I can reproduce this more than once.
+          required: false
+

@@ -1,0 +1,47 @@
+name: Experiment report
+description: Track an RML experiment outcome (success/failure/neutral).
+title: "[Experiment] "
+labels: ["experiment"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What hypothesis were you testing?
+      placeholder: One sentence hypothesis.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Run config
+      description: Include exact train command and key flags.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Key results
+      description: Paste the important summary numbers only.
+      placeholder: collapse rate, override allowed rate, trusted baseline counts, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: interpretation
+    attributes:
+      label: Interpretation
+      description: What did this run prove or disprove?
+    validations:
+      required: true
+
+  - type: textarea
+    id: next_step
+    attributes:
+      label: Next step
+      description: One concrete next patch or run.
+      placeholder: run v24 with rescue-no-parent-rate 0.50 and inject-n 2.
+
