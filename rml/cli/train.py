@@ -46,6 +46,7 @@ CSV_APPEND_FIELDS = [
     "rescue_reason",
     "rescue_no_parent_rate_threshold",
     "rescue_best_floor",
+    "rescue_median_floor",
     "rescue_low_split_n",
     "rescue_inject_n",
     "rescue_max_per_run",
@@ -61,6 +62,7 @@ CSV_APPEND_FIELDS = [
     "rescue_no_parent_rate_observed",
     "rescue_candidate_n_observed",
     "rescue_best_observed",
+    "rescue_median_observed",
     "rescue_collapse_observed",
     "rescue_low_split_observed",
     "rescue_injection_total",
@@ -296,6 +298,8 @@ def train_cmd(args) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if args.rescue_no_parent_rate < 0.0 or args.rescue_no_parent_rate > 1.0:
         raise SystemExit("--rescue-no-parent-rate must be in [0, 1]")
+    if args.rescue_median_floor is not None and args.rescue_median_floor < 0.0:
+        raise SystemExit("--rescue-median-floor must be >= 0 when provided")
     if args.rescue_inject_n < 0:
         raise SystemExit("--rescue-inject-n must be >= 0")
     if args.rescue_max_per_run < 0:
@@ -364,6 +368,11 @@ def train_cmd(args) -> None:
         rescue_enable=bool(args.rescue_enable),
         rescue_no_parent_rate=float(args.rescue_no_parent_rate),
         rescue_best_floor=float(args.rescue_best_floor),
+        rescue_median_floor=(
+            float(args.rescue_median_floor)
+            if args.rescue_median_floor is not None
+            else None
+        ),
         rescue_inject_n=int(args.rescue_inject_n),
         rescue_max_per_run=int(args.rescue_max_per_run),
         rescue_max_per_episode=int(args.rescue_max_per_episode),
@@ -438,6 +447,7 @@ def train_cmd(args) -> None:
         row.setdefault("rescue_reason", meta.get("rescue_reason"))
         row.setdefault("rescue_no_parent_rate_threshold", meta.get("rescue_no_parent_rate_threshold"))
         row.setdefault("rescue_best_floor", meta.get("rescue_best_floor"))
+        row.setdefault("rescue_median_floor", meta.get("rescue_median_floor"))
         row.setdefault("rescue_low_split_n", meta.get("rescue_low_split_n"))
         row.setdefault("rescue_inject_n", meta.get("rescue_inject_n"))
         row.setdefault("rescue_max_per_run", meta.get("rescue_max_per_run"))
@@ -453,6 +463,7 @@ def train_cmd(args) -> None:
         row.setdefault("rescue_no_parent_rate_observed", meta.get("rescue_no_parent_rate_observed"))
         row.setdefault("rescue_candidate_n_observed", meta.get("rescue_candidate_n_observed"))
         row.setdefault("rescue_best_observed", meta.get("rescue_best_observed"))
+        row.setdefault("rescue_median_observed", meta.get("rescue_median_observed"))
         row.setdefault("rescue_collapse_observed", meta.get("rescue_collapse_observed"))
         row.setdefault("rescue_low_split_observed", meta.get("rescue_low_split_observed"))
         row.setdefault("rescue_injection_total", meta.get("rescue_injection_total"))
@@ -768,6 +779,12 @@ def add_train_subparser(sub):
         type=float,
         default=0.12,
         help="Trigger rescue when best scalar falls below this floor.",
+    )
+    p.add_argument(
+        "--rescue-median-floor",
+        type=float,
+        default=None,
+        help="Optional trigger: rescue when median scalar falls below this floor.",
     )
     p.add_argument(
         "--rescue-inject-n",

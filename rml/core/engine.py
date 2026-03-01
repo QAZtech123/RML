@@ -615,6 +615,7 @@ class EngineConfig:
     rescue_enable: bool = False
     rescue_no_parent_rate: float = 0.66
     rescue_best_floor: float = 0.12
+    rescue_median_floor: Optional[float] = None
     rescue_inject_n: int = 1
     rescue_max_per_run: int = 10
     rescue_max_per_episode: int = 2
@@ -1862,6 +1863,7 @@ class RMLEngine:
         rescue_no_parent_rate_observed = None
         rescue_candidate_n_observed = len(episodes)
         rescue_best_observed = None
+        rescue_median_observed = None
         rescue_collapse_observed = None
         rescue_low_split_observed = None
         if bool(getattr(cfg, "rescue_enable", False)):
@@ -1923,6 +1925,7 @@ class RMLEngine:
                 and provisional_median < collapse_scalar_threshold
             )
             rescue_best_observed = provisional_best
+            rescue_median_observed = provisional_median
             rescue_collapse_observed = provisional_collapse_flag
             rescue_low_split_observed = provisional_low_unseen_n + provisional_low_shift_n
 
@@ -1930,6 +1933,16 @@ class RMLEngine:
             try:
                 if provisional_best is not None and float(provisional_best) < float(cfg.rescue_best_floor):
                     quality_reasons.append("best_low")
+            except Exception:
+                pass
+            try:
+                rescue_median_floor = getattr(cfg, "rescue_median_floor", None)
+                if (
+                    rescue_median_floor is not None
+                    and provisional_median is not None
+                    and float(provisional_median) < float(rescue_median_floor)
+                ):
+                    quality_reasons.append("median_low")
             except Exception:
                 pass
             if provisional_collapse_flag:
@@ -2951,6 +2964,11 @@ class RMLEngine:
             "rescue_reason": rescue_reason,
             "rescue_no_parent_rate_threshold": float(getattr(cfg, "rescue_no_parent_rate", 0.66)),
             "rescue_best_floor": float(getattr(cfg, "rescue_best_floor", 0.12)),
+            "rescue_median_floor": (
+                float(getattr(cfg, "rescue_median_floor"))
+                if getattr(cfg, "rescue_median_floor", None) is not None
+                else None
+            ),
             "rescue_low_split_n": int(getattr(cfg, "rescue_low_split_n", 8)),
             "rescue_inject_n": int(getattr(cfg, "rescue_inject_n", 1)),
             "rescue_max_per_run": int(getattr(cfg, "rescue_max_per_run", 10)),
@@ -2966,6 +2984,7 @@ class RMLEngine:
             "rescue_no_parent_rate_observed": rescue_no_parent_rate_observed,
             "rescue_candidate_n_observed": rescue_candidate_n_observed,
             "rescue_best_observed": rescue_best_observed,
+            "rescue_median_observed": rescue_median_observed,
             "rescue_collapse_observed": rescue_collapse_observed,
             "rescue_low_split_observed": rescue_low_split_observed,
             "rescue_injection_total": int(getattr(self, "_rescue_injection_total", 0)),

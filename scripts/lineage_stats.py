@@ -1165,6 +1165,8 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
         "rescue_triggered",
         "rescue_reason",
         "rescue_injected_n",
+        "rescue_median_floor",
+        "rescue_median_observed",
         "rescue_supply_status",
         "rescue_supply_fail_reason",
         "rescue_supply_candidates_seen_n",
@@ -1240,6 +1242,15 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
     print(f"- rescue_triggered_steps={len(triggered_rows)}")
     print(f"- rescue_injected_steps={len(rescue_rows)}")
     print(f"- rescue_injected_total={rescue_injected_total}")
+    rescue_median_floor_vals = [
+        _as_float(row.get("rescue_median_floor"))
+        for row in rows
+        if _as_float(row.get("rescue_median_floor")) is not None
+    ]
+    if rescue_median_floor_vals:
+        print(f"- rescue_median_floor={rescue_median_floor_vals[-1]:.4f}")
+    else:
+        print("- rescue_median_floor=disabled")
     if rescue_supply_seen_values:
         print(
             f"- rescue_supply_candidates_seen_stats: min={min(rescue_supply_seen_values)} "

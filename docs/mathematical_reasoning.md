@@ -114,6 +114,7 @@ Where:
 ```text
 quality_failure =
   (best_scalar < rescue_best_floor)
+  OR (rescue_median_floor is set AND median_scalar < rescue_median_floor)
   OR collapse_flag
   OR (low_unseen_n + low_shift_n >= rescue_low_split_n)
 ```

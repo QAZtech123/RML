@@ -71,6 +71,9 @@ It is intentionally operational, not aspirational.
 
 - Added rescue trigger telemetry:
   - `rescue_triggered`, `rescue_reason`, `rescue_injected_n`
+- Added optional median-aware trigger control:
+  - `--rescue-median-floor`
+  - emitted as `rescue_median_floor` and `rescue_median_observed`
 - Added rescue supply ladder and supply-state telemetry:
   - `rescue_supply_status`
   - `rescue_supply_fail_reason`
