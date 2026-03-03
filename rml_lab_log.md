@@ -468,3 +468,132 @@ Purpose: keep a strict success/failure record for recursive meta-learning runs s
 - Single highest-ROI change: append `v23_control` and `v23_rescue` empirical entries immediately after runs complete.
 - Success criterion: docs remain aligned with measured outcomes and no over-claim drift appears.
 - Abort criterion: if control/rescue results contradict current written framing, revise docs before any public release.
+
+## Run v25_rescue_budgetfix - rescue active, budget-limited stabilization
+
+### Header
+- commit_hash: b0afe24
+- runner_version: real
+- engine_instrumentation_version: 5
+- override_gene_version: strict-v3 + delayed reward + rescue hooks
+- seed: default
+- steps: 300
+- programs_per_step: 12
+- episode_len_E: 50
+- maturity_window_W: 10
+- reward_blend_proxy: 0.3
+- reward_blend_delayed: 0.7
+- baseline_policy: global
+- baseline_min_n: 5
+- baseline_trim_n: 7
+- baseline_trim_frac: 0.2
+- candidate_low_k: 5
+- rescue_enable: true
+- rescue_no_parent_rate: 0.25
+- rescue_best_floor: 0.12
+- rescue_median_floor: disabled
+- rescue_inject_n: 1
+- rescue_max_per_run: 40
+- rescue_max_per_episode: 6
+- rescue_low_split_n: 6
+- csv_path: runs/train_log_transfer_v25_rescue_budgetfix.csv
+- lineage_report_path: runs/lineage_v25_rescue_budgetfix.txt
+
+### Observed Metrics
+- collapse_steps: 121/300 (0.4033)
+- no_parent_rate_vs_collapse: pearson=0.5173 spearman=0.5917
+- no_parent_bucket_(0.66,1.0]_p_collapse: 0.7257
+- rescue_triggered_steps: 37
+- rescue_injected_steps: 36
+- rescue_supply_status_ok: 36/37
+- rescue_injected_source_mix: fallback_checkpoint=36 (1.000)
+- rescue_vs_non_rescue_p_collapse: 0.5278 vs 0.3864
+- override_allowed_rate: 22/257 (0.0856)
+- strict_primary_survival_mean: +0.0167
+- strict_transfer_survival_mean: +0.0071
+- kernel_p_general_improve: 0.5455 (n_events=12, reliable=no)
+
+### What Worked
+- Rescue supply pipeline became operational (injection now happens in almost all triggered steps).
+- Override throughput improved compared with earlier low-throughput runs.
+- Strict overrides produced positive primary and transfer means in this run.
+
+### What Failed
+- Collapse remained high and strongly coupled to high no-parent rate.
+- Rescue did not reduce collapse; rescue steps were worse than non-rescue steps.
+- Injection source was one-sided (`fallback_checkpoint` only), limiting rescue quality.
+
+### Hypothesis Update
+- Current belief: rescue trigger logic is functional, but rescue quality is constrained by source quality and no-parent regime dominance.
+- Evidence strength: medium
+- Risks/confounds: single-seed variance; collapse-state confounding at trigger time.
+
+### Next Test
+- Single highest-ROI change: enable median floor to target population-level collapse, then re-evaluate rescue impact.
+- Success criterion: reduced `p_collapse_overall` and reduced `p_collapse` in rescue steps relative to non-rescue.
+- Abort criterion: rescue remains fallback-only and collapse stays >0.35.
+
+## Run v26_rescue_median - median floor enabled, rescue budget exhaustion exposed
+
+### Header
+- commit_hash: b0afe24
+- runner_version: real
+- engine_instrumentation_version: 5
+- override_gene_version: strict-v3 + delayed reward + rescue hooks
+- seed: default
+- steps: 300
+- programs_per_step: 12
+- episode_len_E: 50
+- maturity_window_W: 10
+- reward_blend_proxy: 0.3
+- reward_blend_delayed: 0.7
+- baseline_policy: global
+- baseline_min_n: 5
+- baseline_trim_n: 7
+- baseline_trim_frac: 0.2
+- candidate_low_k: 5
+- rescue_enable: true
+- rescue_no_parent_rate: 0.25
+- rescue_best_floor: 0.20
+- rescue_median_floor: 0.25
+- rescue_inject_n: 1
+- rescue_max_per_run: 20
+- rescue_max_per_episode: 2
+- rescue_low_split_n: 6
+- csv_path: runs/train_log_transfer_v26_rescue_median.csv
+- lineage_report_path: runs/lineage_v26_rescue_median.txt
+
+### Observed Metrics
+- collapse_steps: 122/300 (0.4067)
+- no_parent_rate_vs_collapse: pearson=0.4731 spearman=0.5450
+- no_parent_bucket_(0.66,1.0]_p_collapse: 0.7087
+- rescue_triggered_steps: 12
+- rescue_injected_steps: 12
+- rescue_injected_source_mix: fallback_checkpoint=12 (1.000)
+- rescue_vs_non_rescue_p_collapse: 0.6667 vs 0.3958
+- override_allowed_rate: 24/222 (0.1081)
+- strict_primary_survival_mean: +0.0120
+- strict_transfer_survival_mean: -0.0141
+- kernel_p_general_improve: 0.0000 (n_events=0, reliable=no)
+- budget_exhaustion_observation: 122 steps had median<0.25, but rescue triggered only 12 steps; `rescue_reason` dominated by `budget_exhausted`.
+
+### What Worked
+- Median-floor signal is visible in trigger reasons (`median_low` appears when rescue triggers).
+- Override throughput increased further (~10.8% considered-to-allowed).
+- Rescue supply availability remained stable (no large `no_checkpoint_found` reversion).
+
+### What Failed
+- Collapse prevalence did not improve versus v25.
+- Transfer survival regressed negative across strict overrides.
+- Rescue still acted as a late/sparse intervention due to tight per-run/per-episode budgets.
+- Rescue injection source remained fallback-only.
+
+### Hypothesis Update
+- Current belief: the active limiter is rescue budget starvation under persistent high no-parent conditions, not missing median-floor instrumentation.
+- Evidence strength: medium-high
+- Risks/confounds: single-seed run; fallback-only injection may confound true median-floor effect.
+
+### Next Test
+- Single highest-ROI change: run unstarved rescue budget with median floor enabled (`max_per_run=40`, `max_per_episode=6`) and compare rescue/non-rescue collapse gap.
+- Success criterion: lower overall collapse and reduced rescue-minus-nonrescue collapse delta.
+- Abort criterion: rescue remains fallback-only with no collapse improvement; then patch source priority (`stale_checkpoint` before `fallback_checkpoint`).
