@@ -1,4 +1,5 @@
 import argparse
+import base64
 import csv
 import hashlib
 import json
@@ -170,7 +171,12 @@ def _infer_accept_mode(row):
 
 SCRATCH_SOURCES = {"none", "no_parent", "forced_scratch", "forced_scratch_step0"}
 COLLAPSE_FLAG_KEYS = ("collapse_step_flag", "collapse_flag", "is_collapse", "collapse")
-COLLAPSE_JSON_KEYS = ("collapse_candidates_json", "collapse_json", "collapse_candidates")
+COLLAPSE_JSON_KEYS = (
+    "collapse_candidates_json_b64",
+    "collapse_candidates_json",
+    "collapse_json",
+    "collapse_candidates",
+)
 
 
 def _is_scratch_like_source(source):
@@ -385,11 +391,18 @@ def _first_present_key(available_keys):
     return available_keys[0] if available_keys else None
 
 
-def _parse_collapse_candidates_blob(blob):
+def _parse_collapse_candidates_blob(blob, is_b64=False):
     if _is_emptyish(blob):
         return None
+    raw = str(blob).strip()
+    if is_b64:
+        try:
+            padded = raw + ("=" * ((4 - (len(raw) % 4)) % 4))
+            raw = base64.b64decode(padded.encode("ascii"), validate=False).decode("utf-8")
+        except Exception:
+            return None
     try:
-        decoded = json.loads(str(blob).strip())
+        decoded = json.loads(raw)
         if isinstance(decoded, str):
             decoded = json.loads(decoded)
     except Exception:
@@ -419,13 +432,18 @@ def _iter_collapse_candidates(rows):
         if step is None:
             continue
         blob = None
+        blob_key = None
         for key in COLLAPSE_JSON_KEYS:
             if key in row and not _is_emptyish(row.get(key)):
                 blob = row.get(key)
+                blob_key = key
                 break
         if blob is None:
             continue
-        candidates = _parse_collapse_candidates_blob(blob)
+        candidates = _parse_collapse_candidates_blob(
+            blob,
+            is_b64=bool(blob_key and blob_key.endswith("_b64")),
+        )
         if not isinstance(candidates, list):
             continue
         for cand in candidates:
@@ -485,11 +503,12 @@ def _print_collapse_causes(rows, top_k=10, schema_hash="", candidate_low_k=5):
     json_parse_fail_n = 0
     json_parse_fail_examples = []
     if json_col_used != "none":
+        json_col_is_b64 = json_col_used.endswith("_b64")
         for row in rows:
             val = row.get(json_col_used)
             if _is_emptyish(val):
                 continue
-            if _parse_collapse_candidates_blob(val) is None:
+            if _parse_collapse_candidates_blob(val, is_b64=json_col_is_b64) is None:
                 json_parse_fail_n += 1
                 if len(json_parse_fail_examples) < 3:
                     sample = str(val).replace("\r", "\\r").replace("\n", "\\n")
@@ -1172,6 +1191,13 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
         "rescue_supply_candidates_seen_n",
         "rescue_supply_attempts_n",
         "rescue_supply_source_selected",
+        "rescue_min_unseen",
+        "rescue_min_transfer",
+        "rescue_max_parent_drop",
+        "rescue_quality_pass_n",
+        "rescue_quality_reject_n",
+        "rescue_quality_pass_by_source",
+        "rescue_quality_reject_reasons",
     ]
     rescue_cols_present = [k for k in rescue_cols if any(k in row for row in rows)]
     print("\nRescue injection diagnostics:")
@@ -1192,11 +1218,46 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
     supply_status_counts = Counter()
     supply_fail_counts = Counter()
     injected_source_counts = Counter()
+    quality_pass_by_source_counts = Counter()
+    quality_reject_reason_counts = Counter()
     rescue_injected_total = 0
     rescue_injected_n_values = []
     rescue_supply_seen_values = []
     rescue_supply_attempt_values = []
     rescue_enable_true_n = 0
+    rescue_quality_pass_total = 0
+    rescue_quality_reject_total = 0
+    rescue_min_unseen_vals = []
+    rescue_min_transfer_vals = []
+    rescue_max_parent_drop_vals = []
+
+    def _parse_count_map(raw):
+        if _is_emptyish(raw):
+            return {}
+        if isinstance(raw, dict):
+            out = {}
+            for k, v in raw.items():
+                try:
+                    out[str(k)] = int(v)
+                except Exception:
+                    continue
+            return out
+        text = str(raw).strip()
+        if not text:
+            return {}
+        try:
+            decoded = json.loads(text)
+            if isinstance(decoded, dict):
+                out = {}
+                for k, v in decoded.items():
+                    try:
+                        out[str(k)] = int(v)
+                    except Exception:
+                        continue
+                return out
+        except Exception:
+            return {}
+        return {}
 
     for row in rows:
         rescue_enabled = _is_trueish(row.get("rescue_enable"))
@@ -1206,6 +1267,15 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
             rescue_enable_true_n += 1
         if rescue_triggered:
             triggered_rows.append(row)
+            min_unseen = _as_float(row.get("rescue_min_unseen"))
+            min_transfer = _as_float(row.get("rescue_min_transfer"))
+            max_parent_drop = _as_float(row.get("rescue_max_parent_drop"))
+            if min_unseen is not None:
+                rescue_min_unseen_vals.append(min_unseen)
+            if min_transfer is not None:
+                rescue_min_transfer_vals.append(min_transfer)
+            if max_parent_drop is not None:
+                rescue_max_parent_drop_vals.append(max_parent_drop)
             reason = str(row.get("rescue_reason") or "").strip()
             if reason:
                 reason_counts[reason] += 1
@@ -1221,6 +1291,16 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
             supply_attempt_n = _as_int(row.get("rescue_supply_attempts_n"))
             if supply_attempt_n is not None:
                 rescue_supply_attempt_values.append(int(supply_attempt_n))
+            quality_pass_n = _as_int(row.get("rescue_quality_pass_n"))
+            if quality_pass_n is not None:
+                rescue_quality_pass_total += int(quality_pass_n)
+            quality_reject_n = _as_int(row.get("rescue_quality_reject_n"))
+            if quality_reject_n is not None:
+                rescue_quality_reject_total += int(quality_reject_n)
+            for src, count in _parse_count_map(row.get("rescue_quality_pass_by_source")).items():
+                quality_pass_by_source_counts[src] += int(count)
+            for reason_key, count in _parse_count_map(row.get("rescue_quality_reject_reasons")).items():
+                quality_reject_reason_counts[reason_key] += int(count)
         if rescue_injected:
             rescue_rows.append(row)
             inj_n = _as_int(row.get("rescue_injected_n"))
@@ -1265,6 +1345,20 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
         )
     else:
         print("- rescue_supply_attempts_stats: min=NA mean=NA max=NA")
+    if rescue_min_unseen_vals:
+        print(f"- rescue_min_unseen={rescue_min_unseen_vals[-1]:.4f}")
+    else:
+        print("- rescue_min_unseen=disabled")
+    if rescue_min_transfer_vals:
+        print(f"- rescue_min_transfer={rescue_min_transfer_vals[-1]:.4f}")
+    else:
+        print("- rescue_min_transfer=disabled")
+    if rescue_max_parent_drop_vals:
+        print(f"- rescue_max_parent_drop={rescue_max_parent_drop_vals[-1]:.4f}")
+    else:
+        print("- rescue_max_parent_drop=disabled")
+    print(f"- rescue_quality_pass_total={rescue_quality_pass_total}")
+    print(f"- rescue_quality_reject_total={rescue_quality_reject_total}")
 
     def _step_stats(sample_rows):
         if not sample_rows:
@@ -1331,6 +1425,15 @@ def _print_rescue_injection_diagnostics(rows, top_k=5):
         print("\nTop rescue supply fail reasons:")
         for reason, n in supply_fail_counts.most_common(max(1, int(top_k))):
             print(f"  - {reason}: {n}")
+    if quality_reject_reason_counts:
+        print("\nTop rescue quality reject reasons:")
+        for reason, n in quality_reject_reason_counts.most_common(max(1, int(top_k))):
+            print(f"  - {reason}: {n}")
+    if quality_pass_by_source_counts:
+        print("\nRescue quality pass by source:")
+        denom = max(1, sum(quality_pass_by_source_counts.values()))
+        for source, n in quality_pass_by_source_counts.most_common(max(1, int(top_k))):
+            print(f"  - {source}: {n} ({n/denom:.3f})")
     if injected_source_counts:
         print("\nInjected source mix:")
         denom = max(1, sum(injected_source_counts.values()))

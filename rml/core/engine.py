@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -48,7 +49,7 @@ class ExecuteRunResult:
 
 
 ELITE_FAIL_PENALTY = 0.05
-ENGINE_INSTRUMENTATION_VERSION = 5
+ENGINE_INSTRUMENTATION_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -616,6 +617,9 @@ class EngineConfig:
     rescue_no_parent_rate: float = 0.66
     rescue_best_floor: float = 0.12
     rescue_median_floor: Optional[float] = None
+    rescue_min_unseen: Optional[float] = None
+    rescue_min_transfer: Optional[float] = None
+    rescue_max_parent_drop: Optional[float] = None
     rescue_inject_n: int = 1
     rescue_max_per_run: int = 10
     rescue_max_per_episode: int = 2
@@ -1735,6 +1739,7 @@ class RMLEngine:
                     "checkpoint_filter": dict(checkpoint_filter),
                     "current_unseen_set_id": current_unseen_set_id,
                     "current_transfer_set_id": current_transfer_set_id,
+                    "parent_unseen_score": warm_start_elite.get("score") if isinstance(warm_start_elite, dict) else None,
                 }
             )
             run_ctx = RunContext.from_parts(
@@ -1860,6 +1865,10 @@ class RMLEngine:
         rescue_supply_candidates_seen_n = 0
         rescue_supply_attempts_n = 0
         rescue_supply_source_selected: List[str] = []
+        rescue_quality_pass_n = 0
+        rescue_quality_reject_n = 0
+        rescue_quality_pass_by_source: Dict[str, int] = {}
+        rescue_quality_reject_reasons: Dict[str, int] = {}
         rescue_no_parent_rate_observed = None
         rescue_candidate_n_observed = len(episodes)
         rescue_best_observed = None
@@ -2216,6 +2225,54 @@ class RMLEngine:
                     if rec is None or not source_label:
                         continue
                     rec_meta = rec.meta if isinstance(rec.meta, dict) else {}
+                    quality_fail_reasons: List[str] = []
+                    rescue_min_unseen = getattr(cfg, "rescue_min_unseen", None)
+                    rescue_min_transfer = getattr(cfg, "rescue_min_transfer", None)
+                    rescue_max_parent_drop = getattr(cfg, "rescue_max_parent_drop", None)
+                    rec_unseen = rec_meta.get("unseen_score") if isinstance(rec_meta, dict) else None
+                    rec_transfer = rec_meta.get("transfer_unseen_accuracy") if isinstance(rec_meta, dict) else None
+                    parent_unseen = ctx.get("parent_unseen_score")
+                    try:
+                        if rescue_min_unseen is not None:
+                            if rec_unseen is None:
+                                quality_fail_reasons.append("missing_unseen")
+                            elif float(rec_unseen) < float(rescue_min_unseen):
+                                quality_fail_reasons.append("unseen_below_floor")
+                    except Exception:
+                        quality_fail_reasons.append("bad_unseen_value")
+                    try:
+                        if rescue_min_transfer is not None:
+                            if rec_transfer is None:
+                                quality_fail_reasons.append("missing_transfer")
+                            elif float(rec_transfer) < float(rescue_min_transfer):
+                                quality_fail_reasons.append("transfer_below_floor")
+                    except Exception:
+                        quality_fail_reasons.append("bad_transfer_value")
+                    try:
+                        if (
+                            rescue_max_parent_drop is not None
+                            and parent_unseen is not None
+                            and rec_unseen is not None
+                        ):
+                            parent_drop = float(parent_unseen) - float(rec_unseen)
+                            if parent_drop > float(rescue_max_parent_drop):
+                                quality_fail_reasons.append("parent_drop_exceeds_max")
+                    except Exception:
+                        quality_fail_reasons.append("bad_parent_delta")
+                    if quality_fail_reasons:
+                        rescue_quality_reject_n += 1
+                        rescue_supply_fail_counts["below_quality_floor"] = (
+                            rescue_supply_fail_counts.get("below_quality_floor", 0) + 1
+                        )
+                        for q_reason in quality_fail_reasons:
+                            rescue_quality_reject_reasons[q_reason] = (
+                                rescue_quality_reject_reasons.get(q_reason, 0) + 1
+                            )
+                        continue
+                    rescue_quality_pass_n += 1
+                    rescue_quality_pass_by_source[source_label] = (
+                        rescue_quality_pass_by_source.get(source_label, 0) + 1
+                    )
                     rec_key = rec_meta.get("checkpoint_id") if isinstance(rec_meta, dict) else None
                     rec_key = rec_key or rec.path.name
                     rescue_seed = self._split_rng(rng_step, step_idx, target_idx, "rescue_inject", rescue_injected_n)
@@ -2328,6 +2385,9 @@ class RMLEngine:
                 elif rescue_supply_fail_counts.get("supply_error"):
                     rescue_supply_status = "error"
                     rescue_supply_fail_reason = _top_fail_reason("supply_error")
+                elif rescue_quality_reject_n > 0:
+                    rescue_supply_status = "quality_reject"
+                    rescue_supply_fail_reason = _top_fail_reason("below_quality_floor")
                 elif rescue_supply_candidates_seen_n > 0:
                     rescue_supply_status = "filtered"
                     rescue_supply_fail_reason = _top_fail_reason("all_filtered")
@@ -2349,9 +2409,10 @@ class RMLEngine:
             if rescue_triggered and rescue_injected_n == 0:
                 if rescue_supply_fail_reason:
                     reason_parts.append(rescue_supply_fail_reason)
-                if rescue_supply_status in {"empty", "filtered", "error"}:
+                if rescue_supply_status in {"empty", "filtered", "error", "quality_reject"}:
                     reason_parts.append(f"supply_{rescue_supply_status}")
-                reason_parts.append("no_checkpoint_found")
+                if rescue_supply_status in {"empty", "filtered", "error"}:
+                    reason_parts.append("no_checkpoint_found")
             if rescue_injected_n > 0:
                 reason_parts.append("injected")
             rescue_reason = "+".join(reason_parts)
@@ -2540,6 +2601,11 @@ class RMLEngine:
         collapse_candidates_json = (
             json.dumps(candidate_debug_rows, sort_keys=True, separators=(",", ":"))
             if collapse_step_flag
+            else ""
+        )
+        collapse_candidates_json_b64 = (
+            base64.b64encode(collapse_candidates_json.encode("utf-8")).decode("ascii")
+            if collapse_candidates_json
             else ""
         )
         if best_unseen_acc is not None:
@@ -3019,6 +3085,21 @@ class RMLEngine:
                 if getattr(cfg, "rescue_median_floor", None) is not None
                 else None
             ),
+            "rescue_min_unseen": (
+                float(getattr(cfg, "rescue_min_unseen"))
+                if getattr(cfg, "rescue_min_unseen", None) is not None
+                else None
+            ),
+            "rescue_min_transfer": (
+                float(getattr(cfg, "rescue_min_transfer"))
+                if getattr(cfg, "rescue_min_transfer", None) is not None
+                else None
+            ),
+            "rescue_max_parent_drop": (
+                float(getattr(cfg, "rescue_max_parent_drop"))
+                if getattr(cfg, "rescue_max_parent_drop", None) is not None
+                else None
+            ),
             "rescue_low_split_n": int(getattr(cfg, "rescue_low_split_n", 8)),
             "rescue_inject_n": int(getattr(cfg, "rescue_inject_n", 1)),
             "rescue_max_per_run": int(getattr(cfg, "rescue_max_per_run", 10)),
@@ -3031,6 +3112,10 @@ class RMLEngine:
             "rescue_supply_candidates_seen_n": int(rescue_supply_candidates_seen_n),
             "rescue_supply_attempts_n": int(rescue_supply_attempts_n),
             "rescue_supply_source_selected": "|".join(rescue_supply_source_selected),
+            "rescue_quality_pass_n": int(rescue_quality_pass_n),
+            "rescue_quality_reject_n": int(rescue_quality_reject_n),
+            "rescue_quality_pass_by_source": rescue_quality_pass_by_source,
+            "rescue_quality_reject_reasons": rescue_quality_reject_reasons,
             "rescue_no_parent_rate_observed": rescue_no_parent_rate_observed,
             "rescue_candidate_n_observed": rescue_candidate_n_observed,
             "rescue_best_observed": rescue_best_observed,
@@ -3039,6 +3124,7 @@ class RMLEngine:
             "rescue_low_split_observed": rescue_low_split_observed,
             "rescue_injection_total": int(getattr(self, "_rescue_injection_total", 0)),
             "collapse_candidates_json": collapse_candidates_json,
+            "collapse_candidates_json_b64": collapse_candidates_json_b64,
             "cache_scope": self.cache_scope,
             "marginals": getattr(self.dist, "top_marginals", lambda v: {})(["ARCH.type", "LRULE.type", "OBJ.primary", "CURR.curriculum.max_len_train", "BUDGET.steps"]),
             "arch_probs": arch_probs,

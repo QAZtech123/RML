@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import json
 import time
@@ -47,6 +48,9 @@ CSV_APPEND_FIELDS = [
     "rescue_no_parent_rate_threshold",
     "rescue_best_floor",
     "rescue_median_floor",
+    "rescue_min_unseen",
+    "rescue_min_transfer",
+    "rescue_max_parent_drop",
     "rescue_low_split_n",
     "rescue_inject_n",
     "rescue_max_per_run",
@@ -59,6 +63,10 @@ CSV_APPEND_FIELDS = [
     "rescue_supply_candidates_seen_n",
     "rescue_supply_attempts_n",
     "rescue_supply_source_selected",
+    "rescue_quality_pass_n",
+    "rescue_quality_reject_n",
+    "rescue_quality_pass_by_source",
+    "rescue_quality_reject_reasons",
     "rescue_no_parent_rate_observed",
     "rescue_candidate_n_observed",
     "rescue_best_observed",
@@ -67,6 +75,7 @@ CSV_APPEND_FIELDS = [
     "rescue_low_split_observed",
     "rescue_injection_total",
     "collapse_candidates_json",
+    "collapse_candidates_json_b64",
     "elite_coupling_counts",
     "elite_len_steps_corr",
     "rml_accept",
@@ -300,6 +309,12 @@ def train_cmd(args) -> None:
         raise SystemExit("--rescue-no-parent-rate must be in [0, 1]")
     if args.rescue_median_floor is not None and args.rescue_median_floor < 0.0:
         raise SystemExit("--rescue-median-floor must be >= 0 when provided")
+    if args.rescue_min_unseen is not None and args.rescue_min_unseen < 0.0:
+        raise SystemExit("--rescue-min-unseen must be >= 0 when provided")
+    if args.rescue_min_transfer is not None and args.rescue_min_transfer < 0.0:
+        raise SystemExit("--rescue-min-transfer must be >= 0 when provided")
+    if args.rescue_max_parent_drop is not None and args.rescue_max_parent_drop < 0.0:
+        raise SystemExit("--rescue-max-parent-drop must be >= 0 when provided")
     if args.rescue_inject_n < 0:
         raise SystemExit("--rescue-inject-n must be >= 0")
     if args.rescue_max_per_run < 0:
@@ -371,6 +386,21 @@ def train_cmd(args) -> None:
         rescue_median_floor=(
             float(args.rescue_median_floor)
             if args.rescue_median_floor is not None
+            else None
+        ),
+        rescue_min_unseen=(
+            float(args.rescue_min_unseen)
+            if args.rescue_min_unseen is not None
+            else None
+        ),
+        rescue_min_transfer=(
+            float(args.rescue_min_transfer)
+            if args.rescue_min_transfer is not None
+            else None
+        ),
+        rescue_max_parent_drop=(
+            float(args.rescue_max_parent_drop)
+            if args.rescue_max_parent_drop is not None
             else None
         ),
         rescue_inject_n=int(args.rescue_inject_n),
@@ -448,6 +478,9 @@ def train_cmd(args) -> None:
         row.setdefault("rescue_no_parent_rate_threshold", meta.get("rescue_no_parent_rate_threshold"))
         row.setdefault("rescue_best_floor", meta.get("rescue_best_floor"))
         row.setdefault("rescue_median_floor", meta.get("rescue_median_floor"))
+        row.setdefault("rescue_min_unseen", meta.get("rescue_min_unseen"))
+        row.setdefault("rescue_min_transfer", meta.get("rescue_min_transfer"))
+        row.setdefault("rescue_max_parent_drop", meta.get("rescue_max_parent_drop"))
         row.setdefault("rescue_low_split_n", meta.get("rescue_low_split_n"))
         row.setdefault("rescue_inject_n", meta.get("rescue_inject_n"))
         row.setdefault("rescue_max_per_run", meta.get("rescue_max_per_run"))
@@ -460,6 +493,10 @@ def train_cmd(args) -> None:
         row.setdefault("rescue_supply_candidates_seen_n", meta.get("rescue_supply_candidates_seen_n"))
         row.setdefault("rescue_supply_attempts_n", meta.get("rescue_supply_attempts_n"))
         row.setdefault("rescue_supply_source_selected", meta.get("rescue_supply_source_selected"))
+        row.setdefault("rescue_quality_pass_n", meta.get("rescue_quality_pass_n"))
+        row.setdefault("rescue_quality_reject_n", meta.get("rescue_quality_reject_n"))
+        row.setdefault("rescue_quality_pass_by_source", meta.get("rescue_quality_pass_by_source"))
+        row.setdefault("rescue_quality_reject_reasons", meta.get("rescue_quality_reject_reasons"))
         row.setdefault("rescue_no_parent_rate_observed", meta.get("rescue_no_parent_rate_observed"))
         row.setdefault("rescue_candidate_n_observed", meta.get("rescue_candidate_n_observed"))
         row.setdefault("rescue_best_observed", meta.get("rescue_best_observed"))
@@ -467,7 +504,15 @@ def train_cmd(args) -> None:
         row.setdefault("rescue_collapse_observed", meta.get("rescue_collapse_observed"))
         row.setdefault("rescue_low_split_observed", meta.get("rescue_low_split_observed"))
         row.setdefault("rescue_injection_total", meta.get("rescue_injection_total"))
-        row.setdefault("collapse_candidates_json", meta.get("collapse_candidates_json"))
+        collapse_candidates_raw = str(meta.get("collapse_candidates_json") or "")
+        collapse_candidates_b64 = str(meta.get("collapse_candidates_json_b64") or "")
+        if collapse_candidates_raw and not collapse_candidates_b64:
+            collapse_candidates_b64 = base64.b64encode(
+                collapse_candidates_raw.encode("utf-8")
+            ).decode("ascii")
+        row.setdefault("collapse_candidates_json_b64", collapse_candidates_b64)
+        # Prefer b64 payload for robustness; keep raw column intentionally blank.
+        row.setdefault("collapse_candidates_json", "")
         # elite coupling (curriculum length x steps)
         row.setdefault("rml_accept", decision.get("accepted"))
         row.setdefault("rml_reason", decision.get("reason"))
@@ -785,6 +830,24 @@ def add_train_subparser(sub):
         type=float,
         default=None,
         help="Optional trigger: rescue when median scalar falls below this floor.",
+    )
+    p.add_argument(
+        "--rescue-min-unseen",
+        type=float,
+        default=None,
+        help="Optional quality floor: reject rescue candidates below this unseen score.",
+    )
+    p.add_argument(
+        "--rescue-min-transfer",
+        type=float,
+        default=None,
+        help="Optional quality floor: reject rescue candidates below this transfer score.",
+    )
+    p.add_argument(
+        "--rescue-max-parent-drop",
+        type=float,
+        default=None,
+        help="Optional quality floor: reject rescue candidates that drop unseen more than this vs parent.",
     )
     p.add_argument(
         "--rescue-inject-n",
