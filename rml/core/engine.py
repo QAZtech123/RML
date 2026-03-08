@@ -2008,7 +2008,41 @@ class RMLEngine:
                     except Exception:
                         return -float("inf")
 
-                def _select_best_payload(payloads: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+                def _payload_source_label(payload: Dict[str, Any]) -> str:
+                    if not isinstance(payload, dict):
+                        return "fallback_checkpoint"
+                    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                    warm_source = str(meta.get("warm_start_source") or "").strip()
+                    if warm_source.startswith("stale_"):
+                        return "stale_checkpoint"
+                    if warm_source == "checkpoint" or warm_source.startswith("checkpoint_"):
+                        return "checkpoint_override"
+                    if warm_source.startswith("fallback_"):
+                        return "fallback_checkpoint"
+                    return "fallback_checkpoint"
+
+                def _record_source_label(rec: CheckpointRecord, default_source: str) -> str:
+                    meta = rec.meta if isinstance(rec.meta, dict) else {}
+                    warm_source = str(meta.get("warm_start_source") or "").strip()
+                    if warm_source.startswith("stale_"):
+                        return "stale_checkpoint"
+                    if warm_source == "checkpoint" or warm_source.startswith("checkpoint_"):
+                        return "checkpoint_override"
+                    if warm_source.startswith("fallback_"):
+                        return "fallback_checkpoint"
+                    return default_source
+
+                def _select_best_payload(
+                    payloads: List[Dict[str, Any]],
+                    preferred_sources: Optional[Tuple[str, ...]] = None,
+                ) -> Optional[Dict[str, Any]]:
+                    if not payloads:
+                        return None
+                    if preferred_sources:
+                        for pref in preferred_sources:
+                            pref_bucket = [p for p in payloads if _payload_source_label(p) == pref]
+                            if pref_bucket:
+                                return _select_best_payload(pref_bucket, preferred_sources=None)
                     best_payload = None
                     best_score = -float("inf")
                     for payload in payloads:
@@ -2069,26 +2103,42 @@ class RMLEngine:
                         sig_payloads = [p for p in arch_payloads if _meta_signature(p) == str(signature_hint)]
                         if same_set_id is not None:
                             sig_same_payloads = [p for p in sig_payloads if _meta_set(p) == str(same_set_id)]
-                            rec = _payload_to_record(_select_best_payload(sig_same_payloads))
+                            selected = _select_best_payload(
+                                sig_same_payloads,
+                                preferred_sources=("stale_checkpoint", "checkpoint_override", "fallback_checkpoint"),
+                            )
+                            rec = _payload_to_record(selected)
                             if rec is not None:
                                 diag["status"] = "ok"
-                                return rec, "stale_checkpoint", diag
-                        rec = _payload_to_record(_select_best_payload(sig_payloads))
+                                return rec, _payload_source_label(selected) if selected is not None else "stale_checkpoint", diag
+                        selected = _select_best_payload(
+                            sig_payloads,
+                            preferred_sources=("stale_checkpoint", "checkpoint_override", "fallback_checkpoint"),
+                        )
+                        rec = _payload_to_record(selected)
                         if rec is not None:
                             diag["status"] = "ok"
-                            return rec, "stale_checkpoint", diag
+                            return rec, _payload_source_label(selected) if selected is not None else "stale_checkpoint", diag
 
                     if arch_payloads:
                         if same_set_id is not None:
                             same_payloads = [p for p in arch_payloads if _meta_set(p) == str(same_set_id)]
-                            rec = _payload_to_record(_select_best_payload(same_payloads))
+                            selected = _select_best_payload(
+                                same_payloads,
+                                preferred_sources=("stale_checkpoint", "checkpoint_override", "fallback_checkpoint"),
+                            )
+                            rec = _payload_to_record(selected)
                             if rec is not None:
                                 diag["status"] = "ok"
-                                return rec, "fallback_checkpoint", diag
-                        rec = _payload_to_record(_select_best_payload(arch_payloads))
+                                return rec, _payload_source_label(selected) if selected is not None else "fallback_checkpoint", diag
+                        selected = _select_best_payload(
+                            arch_payloads,
+                            preferred_sources=("stale_checkpoint", "checkpoint_override", "fallback_checkpoint"),
+                        )
+                        rec = _payload_to_record(selected)
                         if rec is not None:
                             diag["status"] = "ok"
-                            return rec, "fallback_checkpoint", diag
+                            return rec, _payload_source_label(selected) if selected is not None else "fallback_checkpoint", diag
 
                     # Ladder stage 3: checkpoint store probes (strict -> relaxed, with and without signature).
                     loose_filter = dict(strict_filter)
@@ -2104,7 +2154,7 @@ class RMLEngine:
                         if rec is not None:
                             diag["status"] = "ok"
                             diag["candidates_seen_n"] = max(1, int(diag["candidates_seen_n"]))
-                            return rec, source
+                            return rec, _record_source_label(rec, source)
                         return None, ""
 
                     probe_filters: List[Tuple[Optional[Dict[str, Any]], str]] = []
@@ -2117,7 +2167,7 @@ class RMLEngine:
                         same_loose = dict(loose_filter)
                         same_loose["unseen_set_id"] = same_set_id
                         probe_filters.append((same_loose, "stale_checkpoint"))
-                    probe_filters.append((dict(loose_filter), "fallback_checkpoint"))
+                    probe_filters.append((dict(loose_filter), "stale_checkpoint"))
                     if same_set_id is not None:
                         probe_filters.append(({"unseen_set_id": same_set_id}, "stale_checkpoint"))
                     probe_filters.append((None, "fallback_checkpoint"))
